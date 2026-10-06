@@ -114,23 +114,17 @@ O status final é **Conectada** quando credenciais e catálogo passam e nenhum e
 
 Duas observações sobre webhooks: assinaturas criadas pela API são apagadas pela Shopify depois de 8 falhas seguidas de entrega (as tentativas se espalham por 4 horas) [AC-64]; "Conectar" as recria. A Shopify envia aviso por e-mail ao endereço de desenvolvedor de emergência do app antes disso: mantenha esse e-mail monitorado. E a Shopify debounce entregas com corpo idêntico e não garante ordem nem entrega [AC-66]; por isso existe a ressincronização completa periódica (`CATALOG_RESYNC_MINUTES`).
 
-## 5. Criar as rotas
+## 5. Criar a operação (vitrine → checkouts)
 
-Em **Rotas > Nova rota** você liga uma vitrine a uma loja checkout. É a única coisa que decide para onde o comprador vai.
+Em **Operações › Nova operação** você liga uma vitrine a uma ou mais lojas checkout em três passos: nome da operação, escolha da vitrine, seleção dos checkouts. Ao criar, o serviço grava a ligação e recalcula o mapeamento de produtos de cada par. É a única coisa que decide para onde o comprador vai.
 
-- **Tipo**: `default` (destino da vitrine quando nenhuma rota por país se aplica) ou `country` (destino para compradores dos países listados, códigos ISO 3166-1 alpha-2, por exemplo `BR, PT`). O país vem do contexto de mercado da vitrine (`Shopify.country` no tema), é usado para escolher a rota e vai no carrinho como país do comprador; ele não decide preço.
-- **Regra de unicidade** entre rotas ativas de uma vitrine: no máximo uma `default`, e cada país em no máximo uma rota `country`. O painel recusa a segunda. Rotas desativadas não contam.
-- **Política de paridade de preço**: `block` (recusa o checkout e alerta quando o preço da loja checkout difere do da vitrine além da tolerância; padrão), `warn` (registra e segue) ou `off` (não compara).
-- **Tolerância**: diferença relativa aceita, em porcentagem (0 = preço idêntico).
-- **Quantidade máxima por variante** (padrão 50; vale para cada linha e para a soma das linhas que caem na mesma variante da loja checkout, com ou sem personalização: 3 "Ana" + 3 "Bia" da mesma variante precisam de limite >= 6) e **máximo de linhas** (padrão 100; o serviço nunca passa de 100 linhas por checkout, mesmo que a rota permita mais).
-- **Estratégia**: `storefront_cart` (carrinho pela Storefront API, conferido linha a linha; padrão) ou `permalink` (link direto de carrinho, sem chamada à Shopify no clique). A diferença está em `docs/ARQUITETURA.md`.
-- **Permitir permalink como reserva**: se a Storefront API da loja checkout estiver indisponível (rede, tempo limite, circuito aberto), usar um permalink **na mesma loja checkout**. Recusa da Shopify (erro de validação) nunca cai nesse caminho.
-
-Ao salvar, o mapeamento do par vitrine/checkout é recalculado. Se mudar a tolerância, as divergências são recalculadas (com a menor tolerância entre as rotas do par, também nas decisões manuais). Remover uma rota pede confirmação numa segunda página, com aviso quando a rota está ativa; nada é apagado antes dela.
+- O **primeiro checkout marcado** vira o destino ativo; os demais ficam disponíveis. Na **Central da operação** (clique no cartão da operação) o menu de cada checkout permite **Tornar destino ativo**, **Sincronizar produtos**, **Ajustes** e **Remover**. A chave ao lado do nome pausa a operação inteira (o botão de finalizar compra da vitrine passa a mostrar aviso).
+- Não existe troca automática de destino: por volume, horário, cota ou falha. A troca é sempre um clique seu.
+- Em **Ajustes** de cada ligação ficam: **política de paridade de preço** (`block` recusa o checkout e alerta quando o preço do checkout difere do da vitrine além da tolerância, padrão; `warn` registra e segue; `off` não compara), **tolerância** em porcentagem, **quantidade máxima por variante** (padrão 50, somando as linhas que caem na mesma variante) e **máximo de linhas** (padrão 100), a **estratégia** (`storefront_cart`, carrinho pela Storefront API conferido linha a linha, padrão; ou `permalink`, link direto de carrinho) e **permalink como reserva** quando a Storefront API estiver indisponível (sempre na mesma loja checkout).
 
 ## 6. Revisar os mapeamentos
 
-Em **Rotas > sua rota > Mapeamentos** está a lista de variantes da vitrine com o destino na loja checkout. O casamento automático usa, nesta ordem, a regra mais confiável que encontrar: **SKU**, **código de barras**, **handle do produto + opções**, **título do produto + opções**. As três primeiras ativam o mapeamento; a última só sugere.
+Em **Central da operação › checkout › Sincronizar produtos** está a lista de variantes da vitrine com o destino na loja checkout. O casamento automático usa, nesta ordem, a regra mais confiável que encontrar: **SKU**, **código de barras**, **handle do produto + opções**, **título do produto + opções**. As três primeiras ativam o mapeamento; a última só sugere.
 
 | Status | Significado | O que fazer |
 | --- | --- | --- |
@@ -175,7 +169,7 @@ Outros caminhos que levam ao checkout da vitrine sem passar pelo serviço: links
 
 **8.1 Endereço de ping.** Abra `https://<vitrine>/apps/checkout-bridge/ping` no navegador (o painel mostra o link na página da vitrine). A resposta certa é um JSON deste serviço: `{"ok":true,"shop":"xxx.myshopify.com","at":"..."}`. Se vier a página HTML da loja ou um 404, o App Proxy não está configurado nessa loja, o caminho é outro, ou a loja está protegida por senha (ver limitações em `docs/ARQUITETURA.md`). `{"ok":false,"code":"unauthorized"}` indica loja não cadastrada no painel, segredo diferente do do app ou relógio do servidor fora do horário (o timestamp assinado tem janela de 90 s).
 
-**8.2 Botão "Testar rota".** Em **Rotas > sua rota**, o botão cria um carrinho de teste na loja checkout com uma amostra de até 10 variantes mapeadas (uma unidade cada, atributo `bridge_test=1`) e lista o que falhou: variante que não entrou no carrinho (produto não publicado no canal que a Storefront API lê), sem estoque, indisponível para o país da rota, preço diferente da vitrine. Não cria sessão nem redireciona ninguém. Em rota por permalink só os dados em cache são conferidos, porque a Shopify não devolve nada ao montar o link; abra o permalink num navegador para confirmar que o carrinho carrega.
+**8.2 Botão "Testar rota".** Em **Ajustes** da ligação (menu do checkout na Central da operação), o botão cria um carrinho de teste na loja checkout com uma amostra de até 10 variantes mapeadas (uma unidade cada, atributo `bridge_test=1`) e lista o que falhou: variante que não entrou no carrinho (produto não publicado no canal que a Storefront API lê), sem estoque, indisponível para o país da rota, preço diferente da vitrine. Não cria sessão nem redireciona ninguém. Em rota por permalink só os dados em cache são conferidos, porque a Shopify não devolve nada ao montar o link; abra o permalink num navegador para confirmar que o carrinho carrega.
 
 **8.3 Compra real.** Faça pelo menos uma compra completa, de preferência com um produto de teste barato, e repita nos caminhos que a vitrine oferece: página do carrinho, gaveta do carrinho, notificação de item adicionado, compra direta na página de produto, celular. Confira:
 
@@ -195,7 +189,7 @@ Teste também uma falha controlada: desative a rota e clique em finalizar compra
 - [ ] `PUBLIC_BASE_URL` em https com certificado válido; `/readyz` responde `{"ok":true}`.
 - [ ] `ENCRYPTION_KEY` e `ADMIN_PASSWORD` fortes; cópia da chave guardada fora do servidor.
 - [ ] Cada loja com status **Conectada** e relatório sem escopo faltando; webhooks criados.
-- [ ] Rota `default` ativa por vitrine (e rotas por país, se usadas); teste da rota sem problemas.
+- [ ] Operação criada com um checkout ativo por vitrine; teste da rota sem problemas.
 - [ ] Mapeamentos sem "Sugerido", "Conflito" e "Sem destino" nos produtos à venda; divergências de preço e moeda zeradas (ou política e tolerância conscientes).
 - [ ] Script no `theme.liquid` da vitrine; ping responde JSON; compra real concluída na loja checkout.
 - [ ] Botões de compra acelerada desligados na página de produto e no carrinho da vitrine; nenhum `<shopify-accelerated-checkout>` nas páginas.

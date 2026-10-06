@@ -6,7 +6,7 @@ Este código não foi testado em uma loja Shopify real. Os pontos em que a Shopi
 
 ## O que o serviço não faz, de propósito
 
-- Não escolhe a loja checkout por volume de vendas, horário, cota, carga ou falha da loja de destino, e não alterna lojas automaticamente. O destino de cada vitrine é a rota que o lojista configura no painel: uma rota padrão e, se quiser, rotas por país do comprador. Se a loja checkout da rota estiver fora do ar, o checkout falha e o lojista é alertado; o comprador nunca é desviado para outra loja.
+- Não escolhe a loja checkout por volume de vendas, horário, cota, carga ou falha da loja de destino, e não alterna lojas automaticamente. O destino de cada vitrine é o checkout ativo da operação que o lojista monta no painel (Operações › Nova operação); os outros checkouts da operação ficam disponíveis para troca manual. Se a loja checkout ativa estiver fora do ar, o checkout falha e o lojista é alertado; o comprador nunca é desviado para outra loja.
 - Não recebe preços do navegador nem os envia à Shopify. A Storefront API não aceita preço na criação do carrinho; o valor vem do catálogo da loja checkout.
 - Não grava dados pessoais do comprador: nenhum e-mail, endereço ou IP em claro (só um HMAC do IP, para correlação).
 - Não altera catálogo nem pedidos: todos os escopos pedidos à Shopify são de leitura (mais `write_app_proxy`, exigido pela documentação para o App Proxy).
@@ -49,6 +49,17 @@ docker run -d --name checkout-bridge --env-file .env -p 8787:8787 -v checkout-br
 ```
 
 O `Dockerfile` roda como usuário sem privilégios, guarda o banco no volume `/app/data` e tem um `HEALTHCHECK` em `/healthz`.
+
+## Teste rápido com duas lojas
+
+Roteiro para quem vai testar com uma loja vitrine e uma loja checkout de verdade:
+
+1. **URL pública com HTTPS.** A Shopify precisa alcançar o serviço (App Proxy e webhooks). Para testar na própria máquina, um túnel resolve: `cloudflared tunnel --url http://localhost:8787` dá uma URL `https://....trycloudflare.com`; coloque-a em `PUBLIC_BASE_URL` no `.env` e reinicie.
+2. **As duas lojas na mesma organização Shopify** (admin da loja › Configurações › Geral › Transferir loja › organização). Sem isso o token do app não funciona (`shop_not_permitted`).
+3. **Lojas › Adicionar Loja**: escolha o tipo e siga o passo a passo que aparece ao lado (criar o app no Dev Dashboard, escopos, App Proxy na vitrine, instalar, copiar Client ID e Client Secret). Ao salvar, o serviço conecta, sincroniza o catálogo e, na vitrine, tenta gravar o script no tema.
+4. **Operações › Nova operação**: nome, escolha a vitrine, marque o checkout, Criar Operação. Os produtos são casados por SKU (cadastre o mesmo SKU nas duas lojas).
+5. **Na vitrine**, desligue os botões de compra acelerada (Buy it now, Shop Pay) no tema, adicione um produto ao carrinho e clique em finalizar compra: você deve cair no checkout da loja checkout com o mesmo item e o preço de lá.
+6. Se algo falhar, a página **Sessões** mostra o motivo de cada tentativa e a **Central da operação** mostra divergências e o botão **Sincronizar produtos**.
 
 ## Verificação e testes
 
