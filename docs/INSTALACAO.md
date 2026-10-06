@@ -15,25 +15,16 @@ O serviço precisa de:
 
 Variáveis de ambiente: todas estão descritas em `.env.example`. As obrigatórias são `PUBLIC_BASE_URL`, `ENCRYPTION_KEY` e `ADMIN_PASSWORD`; o `.env.example` vem com elas vazias e o serviço se recusa a subir sem elas (e com a senha de exemplo). Como elas chegam ao processo: `npm start` lê o arquivo `.env` do diretório atual, se existir (`node --env-file-if-exists=.env`); no Docker, `docker run --env-file .env`; no systemd, `EnvironmentFile=/caminho/.env` ou `WorkingDirectory=` apontando para o projeto. Fora disso o processo lê apenas o ambiente que recebe. Trocar `ADMIN_PASSWORD` e reiniciar invalida todas as sessões abertas do painel (o banco guarda um HMAC do token com chave derivada da senha); manter a senha mantém as sessões.
 
-## 1. Agrupar as lojas em uma organização Shopify
+## 1. Um app por loja (contas diferentes funcionam)
 
-O serviço se autentica na Admin API de cada loja com o **client credentials grant** de um app criado no Dev Dashboard. Esse tipo de acesso só funciona quando o app e a loja pertencem à **mesma organização Shopify** [SC-23]; com uma loja de outra organização, a Shopify responde `shop_not_permitted`, mesmo que a mesma pessoa seja dona das duas [SC-24, SC-10]. Além disso, um app do Dev Dashboard só pode ser instalado em lojas da organização em que foi criado [SC-10, SC-11].
+O serviço se autentica na Admin API de cada loja com o **client credentials grant** de um app criado no Dev Dashboard. Esse acesso exige que o app e a loja pertençam à mesma organização Shopify [SC-23]; por isso a regra aqui é simples: **cada loja cria o próprio app, pelo admin dela** (Configurações › Apps e canais de vendas › Desenvolver apps › "Build apps in Dev Dashboard"). O app criado assim já nasce na organização daquela loja, e o serviço guarda o Client ID e o Client Secret de cada loja separadamente.
 
-Para lojas que não são Plus, uma organização é um grupo de lojas com usuários, configurações e cobrança compartilhados. As lojas **não** ficam na mesma organização automaticamente: a pessoa dona precisa agrupá-las [SC-13].
+Consequências práticas:
 
-Requisitos para agrupar lojas não Plus [SC-13]:
-
-- pelo menos duas lojas;
-- a mesma pessoa como dona (store owner) de todas;
-- a mesma moeda de cobrança em todas (INR não é aceita).
-
-Caminho [SC-14]: admin da loja > **Configurações > Geral > Transferir loja > Gerenciar > "Mover a loja para uma organização nova ou existente"** > escolher ou criar a organização > Confirmar. Só a pessoa dona vê essa opção. Lojas Plus usam o mecanismo de lojas de expansão em vez disso.
-
-Efeitos colaterais que valem conhecer [SC-15]: a cobrança e os meios de pagamento passam para o nível da organização, as permissões de cobrança e de gestão de usuários passam para a pessoa dona da organização, e a moeda de cobrança da organização nunca mais muda. Ao agrupar, usuários mantêm as permissões da loja, mas perdem as permissões de organização; o acesso ao Dev Dashboard é uma permissão de organização, então quem for criar o app pode precisar receber de novo o papel "App developer" (Desenvolvimento de apps > Desenvolver) [SC-17].
-
-**Agrupe antes de criar o app.** A Shopify não documenta o que acontece com apps já criados quando a loja muda de organização.
-
-Se alguma loja não puder ser agrupada, ela não pode ser ligada por este serviço do jeito como ele está escrito (ele só implementa o client credentials grant). A alternativa documentada pela Shopify é distribuição personalizada com authorization code grant [SC-12, SC-30], que não está implementada.
+- Vitrine e checkout podem estar em **contas Shopify diferentes**, de pessoas diferentes. Cada uma cadastra a sua loja com o app dela.
+- O que **não** funciona é usar o app de uma loja para acessar outra loja: a Shopify responde `shop_not_permitted` [SC-24]. Se isso aparecer no relatório de conexão, o Client ID/Secret informado não é de um app criado no admin daquela loja.
+- Agrupar lojas numa organização é opcional. Só vale a pena se você quiser reaproveitar um único app em várias lojas da mesma pessoa [SC-10, SC-13]; não é pré-requisito.
+- Crie o app pelo admin da loja, não por uma conta de Partner: apps de Partner não aceitam o client credentials grant em lojas de produção [RISK-01].
 
 ## 2. Criar o app no Dev Dashboard
 
@@ -84,7 +75,7 @@ Se a Shopify responder **HTTP 430** (rejeição de segurança) às chamadas sem 
 
 No Dev Dashboard, abra o app e clique em **Install app** no cartão *Installs* (ou no menu de três pontos na lista de apps). O link de instalação abre o fluxo de consentimento; escolha a loja e confirme [SC-09]. Repita para cada loja (o mesmo link serve para outras lojas da organização [SC-11]).
 
-Pré-requisitos para o token funcionar depois: versão lançada com os escopos, app instalado na loja, loja e app na mesma organização [SC-23].
+Pré-requisitos para o token funcionar depois: versão lançada com os escopos, app instalado na loja e app criado pelo admin da própria loja [SC-23].
 
 **Mudança de escopo**: exige lançar uma versão nova **e** aprovar a mudança em cada loja onde o app está instalado [SC-27]. A documentação diverge sobre a aprovação ser automática para apps da própria organização [SC-28]; trate a aprovação por loja como necessária e confira pelo relatório de conexão do painel.
 
@@ -184,7 +175,7 @@ Teste também uma falha controlada: desative a rota e clique em finalizar compra
 
 ## 9. Checklist de go-live
 
-- [ ] Todas as lojas na mesma organização; apps criados no Dev Dashboard da organização (não de Partner).
+- [ ] Um app por loja, criado pelo admin da própria loja (não por conta de Partner).
 - [ ] Versão lançada com os escopos do papel e instalada em cada loja; App Proxy configurado na vitrine.
 - [ ] `PUBLIC_BASE_URL` em https com certificado válido; `/readyz` responde `{"ok":true}`.
 - [ ] `ENCRYPTION_KEY` e `ADMIN_PASSWORD` fortes; cópia da chave guardada fora do servidor.
