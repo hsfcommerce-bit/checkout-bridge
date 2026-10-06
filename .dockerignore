@@ -1,0 +1,24 @@
+# Nunca entram na imagem: segredos, banco local e artefatos de desenvolvimento.
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-*
+*.log
+
+node_modules/
+npm-debug.log*
+
+.git/
+.gitignore
+.claude/
+.DS_Store
+
+# Testes e documentação não são executados em produção.
+test/
+docs/
+README.md
+
+Dockerfile
+.dockerignore
