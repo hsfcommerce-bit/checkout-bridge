@@ -29,7 +29,7 @@ const CSP = [
   "default-src 'none'",
   "style-src 'self'",
   "script-src 'self'",
-  "img-src 'self' data:",
+  "img-src 'self' data: https://cdn.shopify.com",
   "form-action 'self'",
   "base-uri 'none'",
   "frame-ancestors 'none'",

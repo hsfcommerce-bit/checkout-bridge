@@ -8,6 +8,7 @@ import { createRateLimiter } from '../src/lib/ratelimit.ts';
 import type { AdminDeps } from '../src/routes/admin/context.ts';
 import { createAdminRoutes } from '../src/routes/admin/index.ts';
 import { fmtMoney } from '../src/routes/admin/layout.ts';
+import { parsePairs } from '../src/routes/admin/mappings.ts';
 import type { AdminSession, Link, LinkTestResult, MatchSummary, Store } from '../src/types.ts';
 import { makeMapping, makeStore, makeVariant, setup } from './db-helpers.ts';
 import type { TestContext } from './db-helpers.ts';
@@ -387,7 +388,12 @@ describe('mapeamentos', () => {
     assert.ok(text.includes('&lt;img src=x onerror=alert(1)&gt;'));
     assert.ok(!text.includes('<img src=x'));
     for (const label of ['Sugerido', 'Conflito', 'Ativo', 'Sem destino']) assert.ok(text.includes(`">${label}</span>`), label);
-    assert.ok(text.includes('Título + opções') && text.includes('>SKU</td>'));
+    assert.ok(text.includes('Título + opções') && text.includes('· SKU</span>'));
+    assert.ok(text.includes('id="list-vitrine"') && text.includes('id="list-checkout"'), 'duas colunas lado a lado');
+    assert.ok(text.includes('draggable="true" data-checkout="9101"'), 'linha do checkout arrastável');
+    assert.ok(text.includes('class="pair-row is-diverge" data-vitrine="103"'), 'linha divergente destacada');
+    assert.ok(text.includes('id="pairs-input" value="') && text.includes('101:9101'), 'pares atuais no campo oculto do Salvar');
+    assert.ok(text.includes('>Auto-Mapear</span>') && text.includes('>Salvar (4)</button>'));
     assert.ok(text.includes('badge-error">Preço</span> <span class="muted">200.00 → 250.00</span>'));
     assert.ok(text.includes('Boné Premium') && text.includes('name="checkoutVariantId" value="9112"'));
     assert.equal(text.match(/>Aprovar</g)?.length, 1, 'só a linha sugerida tem Aprovar');
@@ -425,12 +431,12 @@ describe('mapeamentos', () => {
     h.repos.mappings.upsertAuto(extra.map((id) => makeMapping(vitrine.id, checkout.id, id)));
     const { cookie } = await h.login();
     const first = await (await h.get(`/admin/links/${link.id}/mappings?status=active`, cookie)).text();
-    assert.equal(first.match(/<tr>\s*<td>/g)?.length, 50);
+    assert.equal(first.match(/ data-vitrine="/g)?.length, 50);
     assert.ok(first.includes('Página 1 de 2') && first.includes('61 registros'));
     // Dentro de atributo o & sai escapado, como manda o HTML.
     assert.ok(first.includes(`href="/admin/links/${link.id}/mappings?status=active&amp;page=2"`));
     const second = await (await h.get(`/admin/links/${link.id}/mappings?status=active&page=2`, cookie)).text();
-    assert.equal(second.match(/<tr>\s*<td>/g)?.length, 11);
+    assert.equal(second.match(/ data-vitrine="/g)?.length, 11);
     assert.ok(second.includes('Página 2 de 2'));
     assert.ok(second.includes('name="return" value="/admin/links/' + link.id + '/mappings?status=active&amp;page=2"'));
   });
@@ -564,5 +570,56 @@ describe('mapeamentos', () => {
     assert.equal(h.repos.mappings.get(vitrine.id, checkout.id, '101')?.status, 'suggested');
     assert.equal((await h.get('/admin/links/ln_nada/mappings', cookie)).status, 404);
     assert.equal((await h.post('/admin/links/ln_nada/mappings/approve', { vitrineVariantId: '101', _csrf: csrf }, cookie)).status, 404);
+  });
+});
+
+describe('mapeamentos: salvar pares da tela lado a lado', () => {
+  it('parsePairs aceita só "vitrine:checkout" com IDs válidos, sem repetir a vitrine', () => {
+    assert.deepEqual(parsePairs('101:9101,102:,abc:1,103:x,101:9999,:5,104'), [
+      { vitrineVariantId: '101', checkoutVariantId: '9101' },
+      { vitrineVariantId: '102', checkoutVariantId: null },
+    ]);
+    assert.deepEqual(parsePairs(''), []);
+  });
+
+  it('grava só os pares que mudaram: destino novo vira ativo travado, par esvaziado vira sem destino travado, inexistente é ignorado', async () => {
+    const h = harness();
+    const { vitrine, checkout } = pair(h);
+    const link = seedMappings(h, vitrine, checkout);
+    const { cookie, csrf } = await h.login();
+    const before = h.repos.mappings.get(vitrine.id, checkout.id, '101');
+    // 101 fica igual (sugerido 9101 -> aprovado como ativo), 102 recebe 9112, 103 é esvaziado,
+    // 104 aponta para variante que não existe no checkout, 105 não existe na vitrine.
+    const res = await h.post(`/admin/links/${link.id}/mappings/save`, { pairs: '101:9101,102:9112,103:,104:4242,105:9101', return: `/admin/links/${link.id}/mappings?page=1`, _csrf: csrf }, cookie);
+    const { location, text } = await follow(h, res, cookie);
+    assert.equal(location, `/admin/links/${link.id}/mappings?page=1`);
+    assert.ok(text.includes('Mapeamento salvo: 3 pares atualizados. 2 pares ignorados (variante fora do catálogo).'), text.slice(text.indexOf('flash'), text.indexOf('flash') + 200));
+    const after = (id: string) => h.repos.mappings.get(vitrine.id, checkout.id, id);
+    assert.equal(after('101')?.status, 'active', 'sugestão com o mesmo destino vira ativa');
+    assert.equal(after('101')?.locked, true);
+    assert.ok(before?.status === 'suggested');
+    assert.deepEqual([after('102')?.checkoutVariantId, after('102')?.status, after('102')?.method], ['9112', 'active', 'manual']);
+    assert.deepEqual([after('103')?.checkoutVariantId, after('103')?.status, after('103')?.locked], [null, 'unmapped', true]);
+    assert.equal(after('104')?.checkoutVariantId, null, 'destino inexistente não é gravado');
+    assert.equal(after('105'), null);
+    // Enviar de novo os mesmos pares não muda nada.
+    const again = await follow(h, await h.post(`/admin/links/${link.id}/mappings/save`, { pairs: '101:9101,102:9112,103:', _csrf: csrf }, cookie), cookie);
+    assert.ok(again.text.includes('Nada a salvar: nenhum par mudou.'));
+    assert.ok(h.repos.audit.list({ limit: 10, offset: 0 }).some((e) => e.action === 'mapping.save' && e.detail['changed'] === 3 && e.detail['ignored'] === 2));
+  });
+
+  it('a última página sem filtros lista no fim as variantes do checkout que nenhum par usa', async () => {
+    const h = harness();
+    const { vitrine, checkout } = pair(h);
+    const link = seedMappings(h, vitrine, checkout);
+    const { cookie } = await h.login();
+    const text = await (await h.get(`/admin/links/${link.id}/mappings`, cookie)).text();
+    // 9999 (Meia Listrada) não é destino nem candidato de ninguém: aparece como linha extra,
+    // com um "Sem variante" do lado da vitrine; 9102/9112 são candidatos e não repetem.
+    assert.ok(text.includes('data-checkout="9999"') && text.includes('Meia Listrada'));
+    assert.equal(text.match(/data-checkout="9112"/g)?.length ?? 0, 0);
+    assert.equal(text.match(/<li class="pair-row pair-empty"><span class="pair-idx">05<\/span>/g)?.length, 1);
+    const filtered = await (await h.get(`/admin/links/${link.id}/mappings?status=active`, cookie)).text();
+    assert.ok(!filtered.includes('data-checkout="9999"'), 'com filtro as extras não aparecem');
   });
 });

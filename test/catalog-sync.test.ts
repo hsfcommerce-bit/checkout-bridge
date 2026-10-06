@@ -135,8 +135,8 @@ describe('syncStore', () => {
     const h = harness(
       scripted({
         '': variantsPage([variantNode('1', '100'), variantNode('2', '100')], 'c1'),
-        c1: variantsPage([variantNode('3', '200', { price: '10', compareAtPrice: '15.5', barcode: '789' })], 'c2'),
-        c2: variantsPage([variantNode('4', '300')], null),
+        c1: variantsPage([variantNode('3', '200', { price: '10', compareAtPrice: '15.5', barcode: '789', image: { url: 'https://cdn.shopify.com/s/files/v3.jpg' } })], 'c2'),
+        c2: variantsPage([variantNode('4', '300', { product: productFields('300', { featuredMedia: { preview: { image: { url: 'https://cdn.shopify.com/s/files/p300.jpg' } } } }) }), variantNode('5', '400', { image: { url: 'http://outro.site/x.jpg' } })], null),
       }),
     );
     h.clock.advance(1000);
@@ -144,7 +144,7 @@ describe('syncStore', () => {
 
     const result = await h.service.syncStore(h.store.id);
 
-    assert.deepEqual(result, { storeId: h.store.id, ok: true, variants: 4, removed: 0, durationMs: 0, detail: null });
+    assert.deepEqual(result, { storeId: h.store.id, ok: true, variants: 5, removed: 0, durationMs: 0, detail: null });
     assert.deepEqual(
       h.pageCalls().map((call) => call.variables),
       [
@@ -154,7 +154,11 @@ describe('syncStore', () => {
       ],
     );
     assert.equal(h.pageCalls().every((call) => call.query === VARIANTS_PAGE_QUERY), true);
-    assert.equal(h.repos.catalog.count(h.store.id), 4);
+    assert.equal(h.repos.catalog.count(h.store.id), 5);
+    // Imagem: a da variante vale; sem ela, a do produto; URL fora do CDN da Shopify é descartada.
+    assert.equal(h.repos.catalog.getVariant(h.store.id, '1')?.imageUrl, null);
+    assert.equal(h.repos.catalog.getVariant(h.store.id, '4')?.imageUrl, 'https://cdn.shopify.com/s/files/p300.jpg');
+    assert.equal(h.repos.catalog.getVariant(h.store.id, '5')?.imageUrl, null);
     assert.deepEqual(h.repos.catalog.getVariant(h.store.id, '3'), {
       storeId: h.store.id,
       variantId: '3',
@@ -173,6 +177,7 @@ describe('syncStore', () => {
       inventoryPolicy: 'DENY',
       inventoryQuantity: 5,
       tracked: true,
+      imageUrl: 'https://cdn.shopify.com/s/files/v3.jpg',
       syncedAt: startedAt,
     });
 
@@ -187,7 +192,7 @@ describe('syncStore', () => {
     const rendered = h.metrics.render();
     assert.match(rendered, /bridge_catalog_sync_total\{result="ok"\} 1/);
     assert.match(rendered, /bridge_catalog_sync_ms_count 1/);
-    assert.ok(rendered.includes(`bridge_catalog_variants{store="${h.store.shopDomain}"} 4`));
+    assert.ok(rendered.includes(`bridge_catalog_variants{store="${h.store.shopDomain}"} 5`));
   });
 
   test('não troca o domínio público já informado e atualiza a moeda quando ela muda', async () => {

@@ -176,6 +176,8 @@ export interface CatalogVariant {
   /** null quando o estoque não é rastreado ou o escopo não permite ler. */
   inventoryQuantity: number | null;
   tracked: boolean;
+  /** Miniatura da variante (ou do produto, quando a variante não tem imagem própria). */
+  imageUrl: string | null;
   /** Momento em que o registro foi lido da Shopify. */
   syncedAt: string;
 }

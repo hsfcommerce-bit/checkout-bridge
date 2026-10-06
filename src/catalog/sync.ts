@@ -72,6 +72,7 @@ const variantNodeSchema = z.object({
   inventoryQuantity: z.number().nullish(),
   selectedOptions: z.array(z.object({ name: z.string(), value: z.string() })).nullish(),
   inventoryItem: z.object({ tracked: z.boolean().nullish() }).nullish(),
+  image: z.object({ url: z.string().nullish() }).nullish(),
 });
 
 const productFieldsSchema = z.object({
@@ -79,6 +80,7 @@ const productFieldsSchema = z.object({
   title: z.string(),
   handle: z.string(),
   status: z.string(),
+  featuredMedia: z.object({ preview: z.object({ image: z.object({ url: z.string().nullish() }).nullish() }).nullish() }).nullish(),
 });
 
 const pageInfoSchema = z.object({
@@ -174,8 +176,17 @@ function toCatalogVariant(
     inventoryPolicy,
     inventoryQuantity: tracked && typeof quantity === 'number' && Number.isFinite(quantity) ? Math.trunc(quantity) : null,
     tracked,
+    imageUrl: httpsUrlOrNull(node.image?.url) ?? httpsUrlOrNull(product.featuredMedia?.preview?.image?.url),
     syncedAt: ctx.syncedAt,
   };
+}
+
+/**
+ * Só URLs https do CDN da Shopify entram no painel (o CSP do painel só libera imagens de
+ * lá); qualquer outra coisa vira null (sem imagem).
+ */
+function httpsUrlOrNull(value: string | null | undefined): string | null {
+  return typeof value === 'string' && /^https:\/\/cdn\.shopify\.com\/[^\s"'<>]+$/.test(value) && value.length <= 2048 ? value : null;
 }
 
 // ---------------------------------------------------------------------------

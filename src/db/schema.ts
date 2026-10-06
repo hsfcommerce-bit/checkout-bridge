@@ -223,6 +223,10 @@ const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE board_cards ADD COLUMN title TEXT NOT NULL DEFAULT '';
   `,
+  // v6: miniatura da variante no painel de mapeamento.
+  `
+  ALTER TABLE catalog_variants ADD COLUMN image_url TEXT;
+  `,
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS.length;

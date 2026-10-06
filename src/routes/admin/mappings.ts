@@ -18,8 +18,11 @@ import { badge, csrfField, fmtMoney, page, pagination, icon } from './layout.ts'
 import type { Markup } from './layout.ts';
 
 /**
- * Mapeamentos de uma rota (montado em /admin/links/:id/mappings): lista paginada com
- * filtros e as decisões manuais linha a linha.
+ * Casamento de produtos de uma rota (montado em /admin/links/:id/mappings): duas colunas
+ * lado a lado, Vitrine e Checkout, com as linhas alinhadas por posição. A linha N da
+ * vitrine está casada com a linha N do checkout; arrastar uma linha do checkout sobre
+ * outra troca as duas de lugar e "Salvar" grava os pares que mudaram. Linhas com
+ * divergência ficam destacadas e o valor divergente sublinhado.
  *
  * Toda decisão manual passa por repos.mappings.setManual com method 'manual' e fica
  * travada, para que o casamento automático não a desfaça; "voltar ao automático" destrava
@@ -32,6 +35,10 @@ import type { Markup } from './layout.ts';
  */
 
 export const MAPPINGS_PAGE_SIZE = 50;
+/** Variantes do checkout sem par mostradas no fim da última página. */
+export const MAX_EXTRA_CHECKOUT_ROWS = 500;
+/** Pares aceitos em um único "Salvar". */
+export const MAX_PAIRS_PER_SAVE = 2000;
 const SEARCH_LIMIT = 50;
 const MAX_QUERY_CHARS = 200;
 
@@ -100,6 +107,26 @@ export function listUrl(linkId: string, filters: MappingFilters, withPage: boole
   return `/admin/links/${linkId}/mappings${qs === '' ? '' : `?${qs}`}`;
 }
 
+/**
+ * Pares "vitrine:checkout" enviados pelo botão Salvar (checkout vazio = sem destino).
+ * Entradas malformadas são ignoradas, nunca viram decisão.
+ */
+export function parsePairs(raw: string): Array<{ vitrineVariantId: string; checkoutVariantId: string | null }> {
+  const out: Array<{ vitrineVariantId: string; checkoutVariantId: string | null }> = [];
+  const seen = new Set<string>();
+  for (const item of raw.split(',').slice(0, MAX_PAIRS_PER_SAVE)) {
+    const sep = item.indexOf(':');
+    if (sep <= 0) continue;
+    const vitrineVariantId = item.slice(0, sep).trim();
+    const checkoutVariantId = item.slice(sep + 1).trim();
+    if (!isValidVariantId(vitrineVariantId) || seen.has(vitrineVariantId)) continue;
+    if (checkoutVariantId !== '' && !isValidVariantId(checkoutVariantId)) continue;
+    seen.add(vitrineVariantId);
+    out.push({ vitrineVariantId, checkoutVariantId: checkoutVariantId === '' ? null : checkoutVariantId });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Marcação
 // ---------------------------------------------------------------------------
@@ -108,18 +135,35 @@ function sel(selected: boolean): string {
   return selected ? 'selected' : '';
 }
 
-function variantCell(variant: CatalogVariant | undefined, fallbackId: string | null, diverging: ReadonlySet<DivergenceKind> = new Set()): Markup {
-  if (variant === undefined) {
-    if (fallbackId === null) return html`<span class="muted">—</span>`;
-    return html`<span class="mono">${fallbackId}</span> <span class="muted">(não está no catálogo)</span>`;
-  }
-  // Valor divergente entre vitrine e checkout fica sublinhado em vermelho, com o motivo no title.
+function pad(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+function thumb(variant: CatalogVariant | undefined): Markup {
+  if (variant?.imageUrl) return html`<img class="pair-thumb" src="${variant.imageUrl}" alt="" loading="lazy" width="40" height="40">`;
+  return html`<span class="pair-thumb">${icon('box')}</span>`;
+}
+
+/** Texto da variante com os valores divergentes sublinhados; o motivo vai no title. */
+function variantText(variant: CatalogVariant, diverging: ReadonlySet<DivergenceKind>): Markup {
   const mark = (kind: DivergenceKind, content: Markup): Markup =>
     diverging.has(kind) ? html`<span class="diverge" title="${DIVERGENCE_LABEL[kind] ?? kind}">${content}</span>` : content;
-  return html`<div><strong>${mark('title', html`${variant.productTitle}`)}</strong></div>
-    <div>${mark('options', html`${variant.variantTitle}`)}</div>
-    <div class="muted">SKU ${variant.sku ?? '—'} · <span class="mono">${variant.variantId}</span></div>
-    <div class="nowrap">${mark(diverging.has('currency') ? 'currency' : 'price', html`${fmtMoney(variant.price, variant.currency)}`)}</div>`;
+  return html`<div class="pair-text">
+    <strong>${mark('title', html`${variant.productTitle}`)}</strong>
+    <div class="pair-sub">${mark('options', html`${variant.variantTitle}`)}</div>
+    <div class="pair-id">SKU ${variant.sku ?? '—'} · <span class="mono">${variant.variantId}</span></div>
+  </div>`;
+}
+
+function priceCell(variant: CatalogVariant, other: CatalogVariant | undefined, diverging: ReadonlySet<DivergenceKind>): Markup {
+  const priceDiverges = diverging.has('price') || diverging.has('currency');
+  const own = fmtMoney(variant.price, variant.currency);
+  return html`<div class="pair-price">${priceDiverges ? html`<span class="diverge" title="${diverging.has('currency') ? DIVERGENCE_LABEL.currency : DIVERGENCE_LABEL.price}">${own}</span>` : own}
+    ${priceDiverges && other !== undefined ? html`<div class="pair-other">(${fmtMoney(other.price, other.currency)})</div>` : ''}</div>`;
+}
+
+function missingCell(id: string): Markup {
+  return html`<div class="pair-text"><strong class="mono">${id}</strong><div class="pair-sub">não está no catálogo</div></div>`;
 }
 
 /** Preço e moeda impedem o checkout (política 'block'); por isso ganham o selo de erro. */
@@ -176,31 +220,73 @@ function rowActions(ctx: RowContext, mapping: VariantMapping): Markup {
   </div>`;
 }
 
-export function mappingRow(ctx: RowContext, mapping: VariantMapping, vitrineVariant: CatalogVariant | undefined): Markup {
+/** Menu "⋯" da linha: status, método, divergências e as decisões manuais. */
+function rowMenu(ctx: RowContext, mapping: VariantMapping): Markup {
   const status = STATUS_BADGE[mapping.status] ?? { kind: 'muted', text: mapping.status };
-  const checkoutVariant = mapping.checkoutVariantId === null ? undefined : ctx.checkoutVariants.get(mapping.checkoutVariantId);
-  const divergingKinds = new Set<DivergenceKind>(mapping.divergences.map((d) => d.kind));
-  return html`<tr>
-    <td>${variantCell(vitrineVariant, mapping.vitrineVariantId, divergingKinds)}</td>
-    <td>${variantCell(checkoutVariant, mapping.checkoutVariantId, divergingKinds)}
-      ${mapping.status === 'conflict' && mapping.candidates.length > 0 ? candidatesList(ctx, mapping) : ''}</td>
-    <td>${mapping.method === null ? html`<span class="muted">—</span>` : METHOD_LABEL[mapping.method]}</td>
-    <td>${badge(status.kind, status.text)}${mapping.locked ? html` ${badge('muted', 'Travado')}` : ''}</td>
-    <td>${divergenceBadges(mapping.divergences)}</td>
-    <td>${rowActions(ctx, mapping)}</td>
-  </tr>`;
+  return html`<details class="pair-menu">
+    <summary class="icon-button" aria-label="Ações da linha">${icon('dots')}</summary>
+    <div class="pair-menu-body">
+      <div class="pair-menu-row">${badge(status.kind, status.text)}${mapping.locked ? html` ${badge('muted', 'Travado')}` : ''}
+        <span class="muted">· ${mapping.method === null ? '—' : METHOD_LABEL[mapping.method]}</span></div>
+      <div class="pair-menu-row">${divergenceBadges(mapping.divergences)}</div>
+      ${mapping.status === 'conflict' && mapping.candidates.length > 0 ? candidatesList(ctx, mapping) : ''}
+      ${rowActions(ctx, mapping)}
+    </div>
+  </details>`;
+}
+
+/** Uma linha de cada coluna: vitrine e o destino atual dela (ou um placeholder). */
+export interface PairRow {
+  index: number;
+  mapping: VariantMapping | null;
+  vitrine: CatalogVariant | undefined;
+  checkout: CatalogVariant | undefined;
+  checkoutId: string | null;
+}
+
+function emptyRow(index: number, side: 'vitrine' | 'checkout'): Markup {
+  return side === 'vitrine'
+    ? html`<li class="pair-row pair-empty"><span class="pair-idx">${pad(index)}</span><span>Sem variante</span></li>`
+    : html`<li class="pair-row pair-empty" draggable="true" data-checkout=""><span class="pair-grip" title="Arraste para trocar de lugar">${icon('grip')}</span><span class="pair-idx">${pad(index)}</span><span>Sem variante</span></li>`;
+}
+
+export function vitrineRow(ctx: RowContext, row: PairRow): Markup {
+  const { mapping } = row;
+  if (mapping === null) return emptyRow(row.index, 'vitrine');
+  const diverging = new Set<DivergenceKind>(mapping.divergences.map((d) => d.kind));
+  const cls = `pair-row${diverging.size > 0 ? ' is-diverge' : ''}`;
+  return html`<li class="${cls}" data-vitrine="${mapping.vitrineVariantId}" data-original="${mapping.checkoutVariantId ?? ''}">
+    <span class="pair-idx">${pad(row.index)}</span>
+    ${thumb(row.vitrine)}
+    ${row.vitrine === undefined ? missingCell(mapping.vitrineVariantId) : variantText(row.vitrine, diverging)}
+    ${row.vitrine === undefined ? '' : priceCell(row.vitrine, row.checkout, diverging)}
+    ${rowMenu(ctx, mapping)}
+  </li>`;
+}
+
+export function checkoutRow(row: PairRow): Markup {
+  if (row.checkoutId === null) return emptyRow(row.index, 'checkout');
+  const diverging = new Set<DivergenceKind>((row.mapping?.divergences ?? []).map((d) => d.kind));
+  const cls = `pair-row${diverging.size > 0 ? ' is-diverge' : ''}`;
+  return html`<li class="${cls}" draggable="true" data-checkout="${row.checkoutId}">
+    <span class="pair-grip" title="Arraste para trocar de lugar">${icon('grip')}</span>
+    <span class="pair-idx">${pad(row.index)}</span>
+    ${thumb(row.checkout)}
+    ${row.checkout === undefined ? missingCell(row.checkoutId) : variantText(row.checkout, diverging)}
+    ${row.checkout === undefined ? '' : priceCell(row.checkout, row.vitrine, diverging)}
+  </li>`;
 }
 
 function filtersForm(linkId: string, filters: MappingFilters): Markup {
-  return html`<form class="filters" method="get" action="/admin/links/${linkId}/mappings">
+  return html`<form class="filters pair-filters" method="get" action="/admin/links/${linkId}/mappings">
     <label class="field"><span>Status</span>
       <select name="status">
         <option value="" ${sel(filters.status === undefined)}>Todos</option>
         ${STATUSES.map((s) => html`<option value="${s}" ${sel(filters.status === s)}>${STATUS_BADGE[s].text}</option>`)}
       </select>
     </label>
-    <label class="field"><span>Buscar</span>
-      <input type="search" name="q" value="${filters.search}" placeholder="Produto, variante ou SKU da vitrine" maxlength="${MAX_QUERY_CHARS}">
+    <label class="field"><span>Buscar na vitrine</span>
+      <input type="search" name="q" value="${filters.search}" placeholder="Produto, variante ou SKU" maxlength="${MAX_QUERY_CHARS}">
     </label>
     <label class="field"><span><input type="checkbox" name="divergent" value="1" ${filters.divergentOnly ? 'checked' : ''}> Só divergentes</span></label>
     <button class="btn btn-secondary" type="submit">Filtrar</button>
@@ -236,6 +322,20 @@ export function createMappingRoutes(deps: AdminDeps): Hono<AdminEnv> {
     return `Mapeamentos: ${storeName(link.vitrineStoreId)} → ${storeName(link.checkoutStoreId)}`;
   }
 
+  /**
+   * Variantes do checkout que nenhum mapeamento do par referencia. Só entram no fim da
+   * última página sem filtros, para que o usuário as veja e possa arrastá-las para um par.
+   */
+  function extraCheckoutVariants(link: Link): { rows: CatalogVariant[]; more: number } {
+    const referenced = new Set<string>();
+    for (const m of repos.mappings.listAll(link.vitrineStoreId, link.checkoutStoreId)) {
+      if (m.checkoutVariantId !== null) referenced.add(m.checkoutVariantId);
+      for (const id of m.candidates) referenced.add(id);
+    }
+    const all = repos.catalog.listAll(link.checkoutStoreId).filter((v) => !referenced.has(v.variantId));
+    return { rows: all.slice(0, MAX_EXTRA_CHECKOUT_ROWS), more: Math.max(0, all.length - MAX_EXTRA_CHECKOUT_ROWS) };
+  }
+
   app.get('/', (c) => {
     const link = repos.links.get(linkIdOf(c));
     if (link === null) return notFound(c);
@@ -255,31 +355,65 @@ export function createMappingRoutes(deps: AdminDeps): Hono<AdminEnv> {
       returnTo: listUrl(link.id, filters, true),
       checkoutVariants: repos.catalog.getVariants(link.checkoutStoreId, checkoutIds),
     };
+    const unfiltered = filters.status === undefined && !filters.divergentOnly && filters.search === '';
+    const lastPage = filters.page * MAPPINGS_PAGE_SIZE >= total;
+    const extras = unfiltered && lastPage ? extraCheckoutVariants(link) : { rows: [], more: 0 };
+    const pairs: PairRow[] = [
+      ...rows.map((m, i): PairRow => ({
+        index: i + 1,
+        mapping: m,
+        vitrine: vitrineVariants.get(m.vitrineVariantId),
+        checkout: m.checkoutVariantId === null ? undefined : ctx.checkoutVariants.get(m.checkoutVariantId),
+        checkoutId: m.checkoutVariantId,
+      })),
+      ...extras.rows.map((v, i): PairRow => ({ index: rows.length + i + 1, mapping: null, vitrine: undefined, checkout: v, checkoutId: v.variantId })),
+    ];
     const counts = repos.mappings.counts(link.vitrineStoreId, link.checkoutStoreId);
     const vitrineCount = repos.catalog.count(link.vitrineStoreId);
     const checkoutCount = repos.catalog.count(link.checkoutStoreId);
+    const pairsValue = pairs.filter((p) => p.mapping !== null).map((p) => `${p.mapping?.vitrineVariantId}:${p.checkoutId ?? ''}`).join(',');
+    const tabBase: MappingFilters = { ...filters, page: 1 };
     const body = html`<div class="op-bar">
         <a class="icon-button" href="/admin/operations/${link.vitrineStoreId}" aria-label="Voltar">←</a>
         <strong class="op-name">${storeName(link.vitrineStoreId)} <span class="muted">→</span> ${storeName(link.checkoutStoreId)}</strong>
-        <span class="pill">Vitrine <strong>${vitrineCount}</strong> variantes</span>
-        <span class="pill">Checkout <strong>${checkoutCount}</strong> variantes</span>
-        ${counts.divergent > 0 ? html`<a class="chip chip-error" href="${listUrl(link.id, { ...filters, divergentOnly: true, page: 1 }, false)}">⚠ ${counts.divergent} com divergência</a>` : badge('ok', 'Sem divergências')}
         <span class="op-actions">
           <a class="btn btn-secondary" href="/admin/links/${link.id}/mappings/export.csv">${icon('box')}<span>CSV</span></a>
-          <form method="post" action="/admin/links/${link.id}/mappings/sync" class="inline-form">${ctx.csrf}<button class="btn btn-secondary" type="submit">${icon('refresh')}<span>Atualizar</span></button></form>
-          <form method="post" action="/admin/links/${link.id}/rematch" class="inline-form">${ctx.csrf}<input type="hidden" name="return" value="${ctx.returnTo}"><button class="btn" type="submit">${icon('swap')}<span>Mapear por SKU</span></button></form>
+          <form method="post" action="/admin/links/${link.id}/mappings/sync" class="inline-form">${ctx.csrf}<button class="btn btn-secondary" type="submit" title="Relê o catálogo das duas lojas na Shopify e recalcula os pares">${icon('refresh')}<span>Atualizar</span></button></form>
+          <form method="post" action="/admin/links/${link.id}/rematch" class="inline-form">${ctx.csrf}<input type="hidden" name="return" value="${ctx.returnTo}"><button class="btn btn-secondary" type="submit" title="Casa automaticamente por SKU, código de barras, handle e título">${icon('bolt')}<span>Auto-Mapear</span></button></form>
+          ${deps.themeInstaller === undefined ? '' : html`<form method="post" action="/admin/stores/${link.vitrineStoreId}/install-theme" class="inline-form">${ctx.csrf}<input type="hidden" name="return" value="${ctx.returnTo}"><button class="btn btn-secondary" type="submit" data-confirm="Gravar o script de redirecionamento no theme.liquid do tema publicado da vitrine?">${icon('swap')}<span>Push Shopify</span></button></form>`}
+          <button class="btn" type="submit" form="pair-form" id="pair-save" data-label="Salvar (${total})">Salvar (${total})</button>
         </span>
       </div>
+      <form id="pair-form" method="post" action="/admin/links/${link.id}/mappings/save" class="inline-form">
+        ${ctx.csrf}
+        <input type="hidden" name="return" value="${ctx.returnTo}">
+        <input type="hidden" name="pairs" id="pairs-input" value="${pairsValue}">
+      </form>
+      <div class="seg pair-tabs">
+        <a href="${listUrl(link.id, { ...tabBase, divergentOnly: false }, false)}" aria-current="${filters.divergentOnly ? 'false' : 'true'}">Mapeamento</a>
+        <a href="${listUrl(link.id, { ...tabBase, divergentOnly: true }, false)}" aria-current="${filters.divergentOnly ? 'true' : 'false'}">Divergências${counts.divergent > 0 ? html` <span class="count-pill">${counts.divergent}</span>` : ''}</a>
+      </div>
       ${filtersForm(link.id, filters)}
-      <section class="card">
-        ${rows.length === 0
-          ? html`<p class="empty">Nenhum mapeamento com esses filtros.</p>`
-          : html`<div class="table-wrap"><table>
-              <thead><tr><th>Vitrine</th><th>Checkout</th><th>Método</th><th>Status</th><th>Divergências</th><th>Ações</th></tr></thead>
-              <tbody>${rows.map((m) => mappingRow(ctx, m, vitrineVariants.get(m.vitrineVariantId)))}</tbody>
-            </table></div>`}
-        ${pagination({ page: filters.page, pageSize: MAPPINGS_PAGE_SIZE, total, baseUrl: listUrl(link.id, filters, false) })}
-      </section>`;
+      ${rows.length === 0
+        ? html`<section class="card"><p class="empty">Nenhum mapeamento com esses filtros.</p></section>`
+        : html`<div class="pair-grid">
+            <section class="card pair-col">
+              <div class="pair-head"><span class="pair-dot"></span> Vitrine <span class="pill"><strong>${vitrineCount}</strong> variantes</span>
+                ${counts.divergent > 0
+                  ? html`<a class="chip chip-error" href="${listUrl(link.id, { ...filters, divergentOnly: true, page: 1 }, false)}">⚠ ${counts.divergent} com divergência</a>`
+                  : badge('ok', 'Todos os produtos OK')}</div>
+              <input class="pair-filter" type="search" placeholder="Buscar produtos nesta página…" aria-label="Filtrar linhas desta página" data-pair-filter="1">
+              <ol class="pair-list" id="list-vitrine">${pairs.map((p) => vitrineRow(ctx, p))}</ol>
+            </section>
+            <section class="card pair-col">
+              <div class="pair-head"><span class="pair-dot checkout"></span> Checkout <span class="pill"><strong>${checkoutCount}</strong> variantes</span>
+                <span class="muted pair-hint">Arraste uma linha sobre outra para trocar o par</span></div>
+              <input class="pair-filter" type="search" placeholder="Buscar produtos nesta página…" aria-label="Filtrar linhas desta página" data-pair-filter="1">
+              <ol class="pair-list" id="list-checkout">${pairs.map((p) => checkoutRow(p))}</ol>
+              ${extras.more > 0 ? html`<p class="muted pair-extra">E mais ${extras.more} variantes do checkout sem par. Use a busca em "Buscar no checkout" para encontrá-las.</p>` : ''}
+            </section>
+          </div>`}
+      ${pagination({ page: filters.page, pageSize: MAPPINGS_PAGE_SIZE, total, baseUrl: listUrl(link.id, filters, false) })}`;
     return c.html(page({ title: title(link), active: 'links', session: c.get('session'), flash: takeFlash(c), body }));
   });
 
@@ -302,7 +436,7 @@ export function createMappingRoutes(deps: AdminDeps): Hono<AdminEnv> {
       const b = m.checkoutVariantId === null ? undefined : chk.get(m.checkoutVariantId);
       return [m.vitrineVariantId, a?.productTitle, a?.variantTitle, a?.sku, a?.price, m.checkoutVariantId, b?.productTitle, b?.variantTitle, b?.sku, b?.price, m.status, m.method, m.divergences.map((d) => d.kind).join('|')].map(cell).join(',');
     });
-    return c.body(`\uFEFF${[header.join(','), ...lines].join('\r\n')}`, 200, {
+    return c.body(`﻿${[header.join(','), ...lines].join('\r\n')}`, 200, {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="mapeamentos-${link.id}.csv"`,
     });
@@ -359,10 +493,10 @@ export function createMappingRoutes(deps: AdminDeps): Hono<AdminEnv> {
           : results.length === 0
             ? html`<p class="empty">Nenhuma variante encontrada no catálogo do checkout.</p>`
             : html`<div class="table-wrap"><table>
-                <thead><tr><th>Produto</th><th>Variante</th><th>SKU</th><th>Preço</th><th>ID</th><th></th></tr></thead>
+                <thead><tr><th></th><th>Produto</th><th>Variante</th><th>SKU</th><th>Preço</th><th>ID</th><th></th></tr></thead>
                 <tbody>${results.map(
                   (v) => html`<tr>
-                    <td>${v.productTitle}</td><td>${v.variantTitle}</td><td>${v.sku ?? '—'}</td>
+                    <td>${thumb(v)}</td><td>${v.productTitle}</td><td>${v.variantTitle}</td><td>${v.sku ?? '—'}</td>
                     <td class="nowrap">${fmtMoney(v.price, v.currency)}</td><td class="mono">${v.variantId}</td><td>${useForm(v)}</td>
                   </tr>`,
                 )}</tbody>
@@ -414,6 +548,49 @@ export function createMappingRoutes(deps: AdminDeps): Hono<AdminEnv> {
   function checkoutExists(link: Link, checkoutVariantId: string): boolean {
     return isValidVariantId(checkoutVariantId) && repos.catalog.getVariant(link.checkoutStoreId, checkoutVariantId) !== null;
   }
+
+  /**
+   * "Salvar" da tela lado a lado: grava só os pares que mudaram em relação ao banco. Par com
+   * destino vira ativo e travado; par esvaziado vira "sem destino" travado (senão o
+   * casamento automático o refaria em seguida). Destinos que não existem no catálogo do
+   * checkout são ignorados e contados na mensagem.
+   */
+  app.post('/save', async (c) => {
+    const link = repos.links.get(linkIdOf(c));
+    if (link === null) return notFound(c);
+    const form = await readForm(c);
+    const returnTo = form['return'] ?? `/admin/links/${link.id}/mappings`;
+    let changed = 0;
+    let ignored = 0;
+    for (const pair of parsePairs(form['pairs'] ?? '')) {
+      const vitrine = repos.catalog.getVariant(link.vitrineStoreId, pair.vitrineVariantId);
+      if (vitrine === null) {
+        ignored += 1;
+        continue;
+      }
+      const current = repos.mappings.get(link.vitrineStoreId, link.checkoutStoreId, pair.vitrineVariantId);
+      const currentId = current?.checkoutVariantId ?? null;
+      if (pair.checkoutVariantId === null) {
+        if (currentId === null) continue;
+        writeManual(link, vitrine, current, null, 'unmapped');
+      } else {
+        if (currentId === pair.checkoutVariantId && current?.status === 'active') continue;
+        if (!checkoutExists(link, pair.checkoutVariantId)) {
+          ignored += 1;
+          continue;
+        }
+        writeManual(link, vitrine, current, pair.checkoutVariantId, 'active');
+      }
+      changed += 1;
+    }
+    audit(deps, 'mapping.save', 'link', link.id, { vitrineStoreId: link.vitrineStoreId, checkoutStoreId: link.checkoutStoreId, changed, ignored });
+    const suffix = ignored > 0 ? ` ${ignored} par${ignored === 1 ? '' : 'es'} ignorado${ignored === 1 ? '' : 's'} (variante fora do catálogo).` : '';
+    setFlash(c, {
+      kind: ignored > 0 && changed === 0 ? 'error' : 'ok',
+      text: changed === 0 ? `Nada a salvar: nenhum par mudou.${suffix}` : `Mapeamento salvo: ${changed} par${changed === 1 ? '' : 'es'} atualizado${changed === 1 ? '' : 's'}.${suffix}`,
+    });
+    return redirectTo(c, returnTo);
+  });
 
   type Action = (link: Link, vitrine: CatalogVariant, current: VariantMapping | null, form: Record<string, string>) => ActionResult;
 

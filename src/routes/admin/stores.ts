@@ -763,10 +763,11 @@ export function createStoreAdminRoutes(deps: AdminDeps): Hono<AdminEnv> {
     const store = repos.stores.get(c.req.param('id'));
     if (store === null) return notFound(c);
     if (deps.themeInstaller === undefined || store.role !== 'vitrine') return notFound(c);
+    const form = await readForm(c);
     const result = await deps.themeInstaller.install(store, deps.renderSnippets(store).inline);
     audit(deps, 'store.install_theme', 'store', store.id, { ok: result.ok, theme: result.themeName, action: result.action });
     setFlash(c, { kind: result.ok ? 'ok' : 'error', text: result.ok ? `Script instalado no tema ${result.themeName ?? ''}: ${result.detail}` : `Não foi possível instalar no tema: ${result.detail}` });
-    return redirectTo(c, `/admin/stores/${store.id}`);
+    return redirectTo(c, form['return'] ?? `/admin/stores/${store.id}`);
   });
 
   app.post('/:id/connect', async (c) => {

@@ -77,6 +77,7 @@ export function makeVariant(storeId: string, variantId: string, overrides: Parti
     inventoryPolicy: 'DENY',
     inventoryQuantity: 10,
     tracked: true,
+    imageUrl: null,
     syncedAt: T0,
     ...overrides,
   };

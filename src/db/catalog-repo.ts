@@ -27,14 +27,14 @@ const MAX_QUERY_CHARS = 200;
 const VARIANT_COLUMNS = `
   store_id, variant_id, product_id, product_title, product_handle, product_status,
   variant_title, options, sku, barcode, price, compare_at_price, currency,
-  available_for_sale, inventory_policy, inventory_quantity, tracked, synced_at`;
+  available_for_sale, inventory_policy, inventory_quantity, tracked, synced_at, image_url`;
 
 /** Ordenação fixa das listagens; os dois últimos campos só desempatam de forma estável. */
 const VARIANT_ORDER = 'ORDER BY product_title COLLATE NOCASE, variant_title COLLATE NOCASE, product_id, variant_id';
 
 const UPSERT_SQL = `
   INSERT INTO catalog_variants (${VARIANT_COLUMNS})
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT (store_id, variant_id) DO UPDATE SET
     product_id = excluded.product_id,
     product_title = excluded.product_title,
@@ -51,7 +51,8 @@ const UPSERT_SQL = `
     inventory_policy = excluded.inventory_policy,
     inventory_quantity = excluded.inventory_quantity,
     tracked = excluded.tracked,
-    synced_at = excluded.synced_at`;
+    synced_at = excluded.synced_at,
+    image_url = excluded.image_url`;
 
 interface VariantRow {
   store_id: string;
@@ -72,6 +73,7 @@ interface VariantRow {
   inventory_quantity: number | null;
   tracked: number;
   synced_at: string;
+  image_url: string | null;
 }
 
 function mapOptions(text: string): VariantOption[] {
@@ -105,6 +107,7 @@ function mapVariant(row: VariantRow): CatalogVariant {
     inventoryPolicy: row.inventory_policy as InventoryPolicy,
     inventoryQuantity: typeof row.inventory_quantity === 'number' ? row.inventory_quantity : null,
     tracked: toBool(row.tracked),
+    imageUrl: textOrNull(row.image_url),
     syncedAt: row.synced_at,
   };
 }
@@ -153,6 +156,7 @@ function toParams(variant: CatalogVariant): SqlParams {
     toQuantity(variant.inventoryQuantity),
     fromBool(variant.tracked === true),
     toIso(variant.syncedAt, 'syncedAt'),
+    nullableText(variant.imageUrl),
   ];
 }
 

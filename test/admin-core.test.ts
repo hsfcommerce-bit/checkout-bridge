@@ -15,7 +15,7 @@ import type { TestContext } from './db-helpers.ts';
 
 const PASSWORD = 'senha-de-teste-123';
 const SECURITY_HEADERS: Array<[string, string]> = [
-  ['content-security-policy', "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"],
+  ['content-security-policy', "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data: https://cdn.shopify.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"],
   ['x-content-type-options', 'nosniff'],
   ['referrer-policy', 'no-referrer'],
   ['x-frame-options', 'DENY'],

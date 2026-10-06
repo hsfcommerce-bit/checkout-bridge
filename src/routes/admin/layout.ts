@@ -722,6 +722,44 @@ details.section > .section-body { padding: 0 .9rem .9rem; }
 .add-checkout > summary { color: var(--muted); }
 
 .op-actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+
+/* Casamento de produtos lado a lado (vitrine | checkout) */
+.pair-tabs { margin: 0 0 1rem; }
+.pair-filters { margin-bottom: 1rem; }
+.pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; margin: 0 0 1rem; }
+@media (max-width: 1000px) { .pair-grid { grid-template-columns: 1fr; } }
+.pair-col { padding: .9rem; }
+.pair-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin: 0 0 .6rem; font-weight: 700; }
+.pair-hint { font-weight: 400; font-size: .75rem; }
+.pair-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.pair-dot.checkout { background: #ec4899; }
+.pair-filter { width: 100%; margin: 0 0 .6rem; }
+.pair-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+.pair-row { display: flex; align-items: center; gap: .6rem; min-height: 64px; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.pair-row.is-diverge { background: var(--error-bg); border-color: color-mix(in srgb, var(--error) 30%, transparent); }
+.pair-row.is-changed { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.pair-row.pair-empty { background: var(--surface-2); border-style: dashed; color: var(--muted); font-size: .8rem; }
+.pair-row.pair-empty span:last-child { flex: 1; text-align: center; }
+.pair-row.is-dragging { opacity: .45; }
+.pair-row.is-over { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.pair-row.is-hidden { display: none; }
+.pair-grip { cursor: grab; color: var(--muted); display: grid; place-items: center; width: 18px; flex: 0 0 auto; }
+.pair-grip .icon { width: 16px; height: 16px; }
+.pair-idx { flex: 0 0 auto; font-size: .7rem; font-weight: 700; color: var(--muted); width: 1.7rem; text-align: center; border: 1px solid var(--border); border-radius: 6px; padding: .2rem 0; background: var(--surface); }
+.pair-thumb { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: var(--surface-2); border: 1px solid var(--border); display: grid; place-items: center; color: var(--muted); }
+.pair-thumb .icon { width: 18px; height: 18px; }
+.pair-text { min-width: 0; flex: 1; font-size: .78rem; line-height: 1.3; }
+.pair-text strong { display: block; font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pair-sub { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pair-id { color: var(--muted); font-size: .68rem; }
+.pair-price { flex: 0 0 auto; text-align: right; font-size: .8rem; font-weight: 600; white-space: nowrap; }
+.pair-other { font-weight: 500; color: var(--error); font-size: .72rem; }
+.pair-menu { position: relative; flex: 0 0 auto; }
+.pair-menu summary { list-style: none; cursor: pointer; width: 30px; height: 30px; }
+.pair-menu summary::-webkit-details-marker { display: none; }
+.pair-menu-body { position: absolute; right: 0; top: 36px; z-index: 5; width: 380px; max-width: 80vw; padding: .75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.14); font-size: .8rem; }
+.pair-menu-row { margin: 0 0 .5rem; }
+.pair-extra { margin: .6rem 0 0; font-size: .8rem; }
 /* Responsivo */
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
@@ -786,6 +824,92 @@ export const ADMIN_JS = `(function () {
     form.querySelector('input[name="column"]').value = col.getAttribute('data-column') || '';
     form.querySelector('input[name="position"]').value = String(cards.length);
     form.submit();
+  });
+
+
+  // Casamento lado a lado: arrastar uma linha do checkout sobre outra troca as duas de
+  // lugar; a linha N do checkout fica casada com a linha N da vitrine. O campo oculto
+  // "pairs" é reescrito a cada troca e o botão Salvar envia o formulário (POST com CSRF).
+  var pairDrag = null;
+  function pairRowOf(target) { return target instanceof Element ? target.closest('#list-checkout .pair-row') : null; }
+  document.addEventListener('dragstart', function (event) {
+    var row = pairRowOf(event.target);
+    if (!row) return;
+    pairDrag = row;
+    row.classList.add('is-dragging');
+    if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; try { event.dataTransfer.setData('text/plain', row.getAttribute('data-checkout') || ''); } catch (e) {} }
+  });
+  document.addEventListener('dragover', function (event) {
+    var row = pairRowOf(event.target);
+    if (!row || !pairDrag || row === pairDrag) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    row.classList.add('is-over');
+  });
+  document.addEventListener('dragleave', function (event) {
+    var row = pairRowOf(event.target);
+    if (row && !row.contains(event.relatedTarget)) row.classList.remove('is-over');
+  });
+  document.addEventListener('drop', function (event) {
+    var row = pairRowOf(event.target);
+    if (!row || !pairDrag || row === pairDrag) return;
+    event.preventDefault();
+    row.classList.remove('is-over');
+    swapRows(pairDrag, row);
+    pairDrag.classList.remove('is-dragging');
+    pairDrag = null;
+    syncPairs();
+  });
+  document.addEventListener('dragend', function () {
+    if (pairDrag) pairDrag.classList.remove('is-dragging');
+    pairDrag = null;
+    Array.prototype.forEach.call(document.querySelectorAll('#list-checkout .is-over'), function (el) { el.classList.remove('is-over'); });
+  });
+  function swapRows(a, b) {
+    var parent = a.parentNode;
+    var aNext = a.nextSibling;
+    var bNext = b.nextSibling;
+    if (aNext === b) { parent.insertBefore(b, a); return; }
+    if (bNext === a) { parent.insertBefore(a, b); return; }
+    parent.insertBefore(a, bNext);
+    parent.insertBefore(b, aNext);
+  }
+  function padIdx(n) { return n < 10 ? '0' + n : String(n); }
+  function syncPairs() {
+    var input = document.getElementById('pairs-input');
+    if (!input) return;
+    var vit = document.querySelectorAll('#list-vitrine .pair-row');
+    var chk = document.querySelectorAll('#list-checkout .pair-row');
+    var parts = [];
+    var changed = 0;
+    for (var i = 0; i < vit.length; i++) {
+      var current = chk[i] ? (chk[i].getAttribute('data-checkout') || '') : '';
+      if (chk[i]) { var idx = chk[i].querySelector('.pair-idx'); if (idx) idx.textContent = padIdx(i + 1); }
+      var v = vit[i].getAttribute('data-vitrine');
+      if (!v) continue;
+      parts.push(v + ':' + current);
+      var isChanged = (vit[i].getAttribute('data-original') || '') !== current;
+      vit[i].classList.toggle('is-changed', isChanged);
+      if (chk[i]) chk[i].classList.toggle('is-changed', isChanged);
+      if (isChanged) changed++;
+    }
+    input.value = parts.join(',');
+    var save = document.getElementById('pair-save');
+    if (save) save.textContent = changed > 0 ? 'Salvar (' + changed + (changed === 1 ? ' alteração)' : ' alterações)') : (save.getAttribute('data-label') || 'Salvar');
+  }
+  // Busca local nas linhas da página: esconde o PAR inteiro (as duas colunas continuam alinhadas).
+  document.addEventListener('input', function (event) {
+    var box = event.target instanceof Element ? event.target.closest('[data-pair-filter]') : null;
+    if (!box) return;
+    var q = box.value.trim().toLowerCase();
+    var vit = document.querySelectorAll('#list-vitrine .pair-row');
+    var chk = document.querySelectorAll('#list-checkout .pair-row');
+    for (var i = 0; i < chk.length; i++) {
+      var text = (chk[i].textContent + ' ' + (vit[i] ? vit[i].textContent : '')).toLowerCase();
+      var hide = q !== '' && text.indexOf(q) === -1;
+      chk[i].classList.toggle('is-hidden', hide);
+      if (vit[i]) vit[i].classList.toggle('is-hidden', hide);
+    }
   });
 
   // data-confirm em link ou botão: pergunta no clique; cancelar impede a navegação ou o envio.

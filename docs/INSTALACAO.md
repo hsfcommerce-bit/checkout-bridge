@@ -115,7 +115,19 @@ Em **Operações › Nova operação** você liga uma vitrine a uma ou mais loja
 
 ## 6. Revisar os mapeamentos
 
-Em **Central da operação › checkout › Sincronizar produtos** está a lista de variantes da vitrine com o destino na loja checkout. O casamento automático usa, nesta ordem, a regra mais confiável que encontrar: **SKU**, **código de barras**, **handle do produto + opções**, **título do produto + opções**. As três primeiras ativam o mapeamento; a última só sugere.
+Em **Central da operação › checkout › Sincronizar produtos** a tela mostra as duas lojas **lado a lado**: a coluna **Vitrine** à esquerda e a coluna **Checkout** à direita, com miniatura, título, variante, SKU, ID e preço. A linha **N** da vitrine está casada com a linha **N** do checkout. Linhas com divergência ficam em vermelho e o valor divergente (título, variante ou preço) aparece sublinhado, com o preço da outra loja entre parênteses.
+
+Botões no topo:
+
+| Botão | O que faz |
+| --- | --- |
+| **Atualizar** | Relê o catálogo das duas lojas na Shopify e recalcula os pares. |
+| **Auto-Mapear** | Casa automaticamente usando, nesta ordem, a regra mais confiável que encontrar: **SKU**, **código de barras**, **handle do produto + opções**, **título do produto + opções**. As três primeiras ativam o mapeamento; a última só sugere. |
+| **Push Shopify** | Grava o script de redirecionamento no `theme.liquid` do tema publicado da vitrine (exige `write_themes`). |
+| **Salvar** | Grava os pares que você mudou arrastando. |
+| **CSV** | Exporta todos os pares. |
+
+Para corrigir um par à mão, **arraste uma linha da coluna Checkout sobre outra**: as duas trocam de lugar e as linhas alteradas ficam com borda laranja. Clique em **Salvar** para gravar. O botão **⋯** de cada linha da vitrine abre o status, o método usado, as divergências e as ações da linha (Aprovar, Definir pelo ID, Buscar no checkout, Desativar, Voltar ao automático). As variantes do checkout que não têm par aparecem no fim da lista, com "Sem variante" do lado da vitrine; arraste-as para a posição certa. A aba **Divergências** filtra só o que precisa de atenção.
 
 | Status | Significado | O que fazer |
 | --- | --- | --- |

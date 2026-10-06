@@ -73,6 +73,9 @@ const VARIANT_CORE_FIELDS = /* GraphQL */ `
     inventoryItem {
       tracked
     }
+    image {
+      url(transform: { maxWidth: 160, maxHeight: 160 })
+    }
   }
 `;
 
@@ -92,6 +95,13 @@ export const VARIANTS_PAGE_QUERY = /* GraphQL */ `
           title
           handle
           status
+          featuredMedia {
+            preview {
+              image {
+                url(transform: { maxWidth: 160, maxHeight: 160 })
+              }
+            }
+          }
         }
       }
       pageInfo {
@@ -115,6 +125,13 @@ export const PRODUCT_VARIANTS_QUERY = /* GraphQL */ `
       title
       handle
       status
+      featuredMedia {
+        preview {
+          image {
+            url(transform: { maxWidth: 160, maxHeight: 160 })
+          }
+        }
+      }
       variants(first: $first, after: $after) {
         nodes {
           ...BridgeVariantCore
